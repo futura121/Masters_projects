@@ -1,0 +1,1042 @@
+---
+title: "The Geography of the Undersea Internet network"
+author: '2020209'
+date: "2024-12-01"
+output:
+  html_document: default
+---
+
+Word count: 3490
+
+# [Introduction]{.underline}
+
+The network of undersea internet cables is responsible for 99% of data transfer internationally. In our digital age, fast and stable connections between countries are key facilitators of economic growth through global commerce, communication and technology. The number of cables between countries indicates their economic connection demonstrating increased need for security and reliably fast data transfer. Whilst rare, cables can be severed by earthquakes, maritime accidents and sabotage, making resilience an important requirement of the network. Installing cables is an expensive process making understanding of the spatial and structural characteristics of the network paramount to its efficient expansion.
+
+Previous work identified that the number of landing points in a country is not defined by geographical characteristics but the network position of that country (Ross, 2014). Sugadev's (2016) work highlights both the importance of India as a hub nation connecting Europe and Asia, as well as identify why this presents issues of vulnerability to the network. This report will explore both the connections to and the connections within the network through exploring:
+
+**H1: The extent to which connection to the undersea internet network defined by factors other than geographical position.**
+
+**H2: The extent to which structural role of countries within the network defined by factors other than geographical position.**
+
+**H3: Identify the largest potential for connections between countries based on their demographic and geographic characteristics.**
+
+The key findings of this report are that countries connected to the network have higher urban and internet populations than those which are not. Nations in the APEC trade group are also more likely to be in the network. Additionally, the location of countries is important for the connection status, with countries within Europe, Asia and South America being less likely to be part of the network. Strategically important countries of high network connectivity (hubs and intermediaries) are likely to have higher total populations (including higher internet populations and larger numbers of migration into the country), and are involved in some form of trade agreement (especially EU and APEC).
+
+The most important connections in the network are found to be in Asia, between India, China and Bangladesh. Where there are connections here already, efforts to increase the resilience of the system by investing in new cable connections would be the most effective for the network.
+
+Not only does this analysis identify the importance of certain countries in the network, but also the vulnerability countries face in the case of cable connections being broken. Providing useful insight into the areas which will benefit most from increased cable connections.
+
+# [Methods]{.underline}
+
+### General setup
+
+The analysis is setup by loading the required packages and then reading the cables and landing data from Tele-geography. This cable data is used to create a network of countries connected by the undersea cables. Groups are made where landing points are in the same country and are the nodes of the network. The edges are created between countries which are connected directly by cables. Countries which are not included in the network are added by name as unconnected nodes. Several data frames of geographical characterists are merged into one file by country names in the network. These include population, GDP, geographical location of centroid, trade group membership and coastline length relative to area. Network characteristics (degree centrality, page rank and betweenness) are used to identify the structural positions of countries within the network. Members of each of these positions (hub, intermediary and periphery) are labelled in the data-set. A seed is set to make the analysis reproducible.
+
+```{r Setup, warning=FALSE}
+setwd("/Users/tomfeeney/Downloads/GDSA/Cities project /Second attempt ")
+set.seed(123)
+
+library(sf)
+library(leaflet)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(igraph)
+library(viridis)
+library(RColorBrewer)
+library(patchwork)
+library(randomForest)
+
+# loading the cable network files
+cables= st_read("cables.json") 
+landings= st_read("landings.json")
+```
+
+```{r Network_Creation, warning=FALSE}
+# Extracting the country names from the landing points
+landings <- landings %>%
+  mutate(country = str_extract(name, "[^,]+$") %>%  
+           str_trim())
+# Group landing points by cable to identify the country of each landing point 
+cable_connections <- landings %>%
+  group_by(id) %>%  
+  summarise(countries = list(unique(country))) 
+# making both sf objects. 
+landings <- st_as_sf(landings, wkt = "geometry", crs = 4326)
+cables <- st_as_sf(cables, wkt = "geometry", crs = 4326)
+
+# joining the data 
+# Extract the endpoints of each cable as points
+cable_endpoints <- cables %>%
+  st_cast("POINT") %>%               
+  group_by(id) %>%                   # Group by cable ID
+  filter(row_number() == 1 | row_number() == n()) %>%  # goes all the way through the data 
+  ungroup()
+
+# Join cable endpoints with landing points based on proximity
+landings_with_cables <- st_join(landings, cable_endpoints, join = st_nearest_feature)
+
+# Extract country name from the 'name' column
+landings_with_cables <- landings_with_cables %>%
+  mutate(country = str_extract(name.x, "[^,]+$") %>%  
+           str_trim())
+
+# grouping by country 
+
+Cable_network <- landings_with_cables %>%
+  group_by(id.y) %>%
+  summarise(countries = list(unique(country))) %>%  # Get unique countries per cable
+  ungroup()
+
+# Initialize an empty data frame to store edges
+edges <- data.frame(from = character(), to = character(), cable_id = character())
+
+# Loop through each cable and create pairs of countries as edges
+for (i in 1:nrow(Cable_network)) {
+  countries <- Cable_network$countries[[i]]
+  cable_id <- Cable_network$id.y[i]
+  
+  # Create all possible pairs of countries for each cable
+  if (length(countries) > 1) {  # Only if there’s more than one country
+    combs <- combn(countries, 2)
+    edges <- rbind(edges, data.frame(
+      from = combs[1, ],
+      to = combs[2, ],
+      cable_id = cable_id
+    ))
+  }
+}
+
+# Create the graph from edges
+Connected_countries_net <- graph_from_data_frame(edges, directed = FALSE)
+
+# adding cable id as edge attribute. 
+E(Connected_countries_net)$cable_id <- edges$cable_id
+
+# List of all countries (this should include all possible countries in your analysis)
+all_countries <- unique(c(
+  V(Connected_countries_net)$name,
+  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", 
+  "Australia", "Austria", "Azerbaijan", "The Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", 
+  "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", 
+  "Bulgaria", "Burkina Faso", "Burundi", "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", 
+  "Chad", "Chile", "China", "Colombia", "Comoros", "Congo, Democratic Republic of the", "Congo, Republic of the", 
+  "Costa Rica", "Côte d’Ivoire", "Croatia", "Cuba", "Cyprus", "Czech Republic", "Denmark", "Djibouti", "Dominica", 
+  "Dominican Republic", "East Timor (Timor-Leste)", "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", 
+  "Estonia", "Eswatini", "Ethiopia", "Fiji", "Finland", "France", "Gabon", "The Gambia", "Georgia", "Germany", 
+  "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana", "Haiti", "Honduras", "Hungary", 
+  "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Jamaica", "Japan", "Jordan", 
+  "Kazakhstan", "Kenya", "Kiribati", "Korea, North", "Korea, South", "Kosovo", "Kuwait", "Kyrgyzstan", "Laos", 
+  "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg", "Madagascar", 
+  "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", 
+  "Micronesia, Federated States of", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", 
+  "Myanmar (Burma)", "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", 
+  "North Macedonia", "Norway", "Oman", "Pakistan", "Palau", "Panama", "Papua New Guinea", "Paraguay", "Peru", 
+  "Philippines", "Poland", "Portugal", "Qatar", "Romania", "Russia", "Rwanda", "Saint Kitts and Nevis", 
+  "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", 
+  "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", 
+  "Solomon Islands", "Somalia", "South Africa", "Spain", "Sri Lanka", "Sudan", "Sudan, South", "Suriname", 
+  "Sweden", "Switzerland", "Syria", "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Togo", "Tonga", 
+  "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu", "Uganda", "Ukraine", 
+  "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan", "Vanuatu", "Vatican City", 
+  "Venezuela", "Vietnam", "Yemen", "Zambia", "Zimbabwe"
+))
+
+# Identify unconnected countries
+connected_countries <- V(Connected_countries_net)$name
+unconnected_countries <- setdiff(all_countries, connected_countries)
+
+# Add isolated nodes for unconnected countries
+all_countries <- add_vertices(Connected_countries_net, nv = length(unconnected_countries), name = unconnected_countries)
+
+edges <- data.frame(from = character(), to = character(), cable_id = character())
+
+# Loop through each cable and create country pairs as edges
+for (i in 1:nrow(Cable_network)) {
+  countries <- Cable_network$countries[[i]]
+  cable_id <- Cable_network$id.y[i]
+
+  # Create all unique pairs of countries for each cable (undirected)
+  if (length(countries) > 1) {
+    combs <- t(combn(countries, 2))  # Create combinations as rows
+    edges <- rbind(edges, data.frame(
+      from = combs[, 1],
+      to = combs[, 2],
+      cable_id = rep(cable_id, nrow(combs))
+    ))
+  }
+}
+
+# Ensure no duplicate edges and consistent node representation
+edges <- unique(edges)
+
+# Create the graph from edges, with countries as nodes
+Network_analysis_network <- graph_from_data_frame(edges, directed = FALSE)
+
+# Add edge attributes if needed
+E(Network_analysis_network)$cable_id <- edges$cable_id
+
+# number of cables 
+E(Network_analysis_network)
+
+num_nodes_in <- vcount(Network_analysis_network)
+cat("Number of countries in UIC network:", num_nodes_in, "\n")
+
+num_nodes_out <- vcount(all_countries) - num_nodes_in
+cat("Number of countries not in UIC network:", num_nodes_out, "\n")
+
+```
+
+```{r Loading_Country_data}
+# Degree centrality of each node
+node_degree <- degree(all_countries, mode = "all")
+
+# Find which countries are and aren't in the network
+network_connection <- ifelse(node_degree > 0, 1, 0)
+
+# Identify subnetworks
+components <- components(all_countries)
+
+# Get connected components
+subnetwork <- components$membership  # Subnetwork index for each node
+
+# Extract the distances within subnetworks
+distances <- distances(all_countries, mode = "all")
+subnetwork_distances <- sapply(unique(subnetwork), function(comp) {
+  nodes_in_comp <- which(subnetwork == comp)
+  mean(distances[nodes_in_comp, nodes_in_comp], na.rm = TRUE)
+})
+
+# Map the average distance back to each node's subnetwork
+average_distance <- subnetwork_distances[subnetwork]
+
+# Calculate betweenness centrality
+node_betweenness <- betweenness(all_countries, normalized = TRUE)
+
+# Calculate PageRank
+node_pagerank <- page_rank(all_countries)$vector
+
+# Determine subnetwork sizes
+subnetwork_sizes <- table(subnetwork)
+
+
+# Define roles based network characteristics 
+roles <- ifelse(
+  # Hub: Top 5% of both degree centrality and PageRank
+  node_degree >= quantile(node_degree, 0.95, na.rm = TRUE) & 
+    node_pagerank >= quantile(node_pagerank, 0.95, na.rm = TRUE), "Hub",
+  ifelse(
+    # Intermediary: Top 20% of betweenness centrality
+    node_betweenness >= quantile(node_betweenness, 0.8, na.rm = TRUE), "Intermediary",
+    ifelse(
+      # Peripheral: Degree = 1 in a subnetwork with more than 1 connection
+      node_degree == 1 & subnetwork_sizes[subnetwork] > 1, "Peripheral",
+      "Unassigned"
+    )
+  )
+)
+
+# Create the new dataframe
+country_connection_status <- data.frame(
+  country = V(all_countries)$name,
+  network_connection = network_connection,
+  degree_centrality = node_degree,
+  subnetwork_distance = average_distance,
+  betweenness_centrality = node_betweenness,
+  pagerank = node_pagerank,
+  role = roles)
+
+
+# GEOGRAPHY 
+# Coastline border 
+coasts= read.csv("coastlines.csv")
+
+# Location (work this out using the landings data)
+centroids= read.csv("centroids.csv")
+
+# SOCIO ECONOMIC 
+
+# Trading groups 
+trade = read.csv("trading_blocs_membership.csv")
+
+# gdp 
+gdp= read.csv("GDP_nation.csv")
+
+# continent 
+continents= read.csv("One-Hot_Encoded_Continent_Data.csv")
+
+# population 
+pop= read.csv("population_by_country_2020.csv")
+
+# Internet proportion
+int_users= read.csv("internet-users-by-country-2024.csv")
+
+```
+
+```{r Merging_country_data_and_network, warning=FALSE}
+
+#Connections_geo
+Connections_geo = merge(
+  x = country_connection_status[c("country","network_connection","degree_centrality","subnetwork_distance", "betweenness_centrality", "pagerank","role" )], 
+  y = coasts[c("country", "coast_to_area_wri")], 
+  by.x = "country", 
+  all.x = TRUE)
+
+Connections_geo = merge(
+  x = Connections_geo, 
+  y = centroids[c("COUNTRY", "longitude", "latitude")], 
+  by.x = "country", 
+  by.y = "COUNTRY", 
+  all.x = TRUE)
+
+#Connections_econ
+
+# trade 
+Connections_econ = merge(
+  x = country_connection_status[c("country","network_connection","degree_centrality","subnetwork_distance" )],  
+  y = trade, 
+  by.x = "country", 
+  by.y = "Country",
+  all.x = TRUE,)
+# where there is NA set to zero 
+Connections_econ[is.na(Connections_econ)] <- 0
+
+
+# gdp
+Connections_econ = merge(
+  x = Connections_econ, 
+  y = gdp, 
+  by  = "country",
+  all.x = TRUE)
+
+# Connections social 
+
+#  Internet users  
+Connections_soc = merge(
+  x = country_connection_status[c("country","network_connection","degree_centrality","subnetwork_distance" )], 
+  y = int_users[c("country", "InternetUsers_NumberOfInternetUsers", "InternetUsers_PctOfPopulationUsingInternet","InternetTraffic12312020")], 
+  by = "country",  
+  all.x = TRUE)
+
+
+# population 
+Connections_soc = merge(
+  x = Connections_soc, 
+  y = pop[c("Country..or.dependency.", "Population..2020.", "Urban.Pop..","Migrants..net.")], 
+  by.x = "country", 
+  by.y = "Country..or.dependency.", 
+  all.x = TRUE)
+
+
+# all data 
+World = merge(
+  x = Connections_econ, 
+  y = Connections_soc, 
+  by  = "country",
+  all.x = TRUE)
+
+World = merge(
+  x = World, 
+  y = Connections_geo, 
+  by  = "country",
+  all.x = TRUE)
+
+# adding continents as I forgot to 
+
+World= merge(
+  x= World,
+  y= continents,
+  by.x = "country",
+  by.y= "Country",
+  all.x = TRUE 
+)
+
+# remove the coloum which is in both 
+World = subset(World, select = -c(
+  degree_centrality.x,
+  subnetwork_distance.x,
+  network_connection.y,
+  network_connection.x,
+  degree_centrality.y,
+  subnetwork_distance.y
+))
+
+# make all rows usable for GLM 
+# remove NA values (set to 0)
+World[is.na(World)] <- 0
+
+World$gdp <- as.numeric(as.character(World$gdp))
+
+#tidying up 
+World <- cbind(
+  World,
+  hub = ifelse(World$role == "Hub", 1, 0),
+  intermediary = ifelse(World$role == "Intermediary", 1, 0),
+  periphery = ifelse(World$role == "Peripheral", 1, 0),
+  unassigned = ifelse(World$role == "Unassigned", 1, 0)
+)
+
+
+# No pesky % allowed 
+World$Urban.Pop.. <- as.numeric(gsub("%", "", World$Urban.Pop..)) / 100
+```
+
+### **The extent to which connection to the undersea internet network defined by factors other than geographical position.**
+
+First a map of the connections is made.
+
+To make a plot of the network, a combination of degree centrality and community detection is required in order to adjust the colour and size of nodes to show the most information. To assess the role of geographical factors a GLM is used, it helps identify where values between groups differ. The GLM is suitable for this case as the variables may not be normally distributed, additionally it can interpret non linear relationships. Where statistically significant results are found, box plots and stacked plots are used to visualise these differences.
+
+```{r Mapping_connections}
+# Loading basemap  
+Countries_basemap= st_read("ne_10m_admin_0_countries_gbr.shp")
+Countries_basemap <- st_set_crs(Countries_basemap, 4326)
+
+# Extract connected countries from the network
+connected_countries <- V(Network_analysis_network)$name
+
+# Ensuring the names line up with the basemap 
+name_corrections <- c(
+  "United States" = "United States of America",
+  "Sint Eustatius and Saba" = "Netherlands",
+  "Virgin Islands (U.S.)" = "United States Virgin Islands",
+  "Virgin Islands (U.K.)" = "British Virgin Islands",
+  "Saint Barthélemy" = "Saint Barthelemy",
+  "Micronesia" = "Federated States of Micronesia",
+  "Guadeloupe" = "France",
+  "Mayotte" = "France",
+  "Martinique" = "France",
+  "French Guiana" = "France",
+  "Bahamas" = "The Bahamas",
+  "Côte d'Ivoire" = "Ivory Coast",
+  "Sao Tome and Principe" = "São Tomé and Principe"
+)
+
+connected_countries <- recode(connected_countries, !!!name_corrections)
+
+# Add the corrected connection status to the Countries_basemap
+Countries_basemap$connected <- ifelse(
+  Countries_basemap$ADMIN %in% connected_countries,
+  "Connected",
+  "Unconnected"
+)
+
+# Adding the missing countries. (visually identified as having cable connections)
+missing_countries <- c(
+  "Bangladesh", "Vietnam", "Madagascar", "South Korea", "Brazil", "Uruguay",
+  "Guyana", "Suriname", "Mozambique", "Western Sahara", "Benin", "Togo",
+  "Ghana", "Congo", "Angola", "Namibia", "Tanzania", "Somalia"
+)
+
+Countries_basemap$connected <- ifelse(
+  Countries_basemap$ADMIN %in% missing_countries,
+  "Missing from Analysis",
+  Countries_basemap$connected
+)
+
+
+Network_map = ggplot() +
+  geom_sf(data = Countries_basemap, aes(fill = connected), color = "black", size = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Connected" = "forestgreen",
+      "Unconnected" = "grey",
+      "Missing from Analysis" = "red"
+    ),
+    name = "Network Connection"
+  ) +
+  geom_sf(data = cables, color = "deeppink", size = 0.3) + # Adjusted size for better visibility
+  coord_sf(expand = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Global Submarine Internet Cable Network",
+    subtitle = "Connected, missing and unconnected Countries",
+    caption = "Connected= 141, Missing= 18 , Unconnected= 72 "
+  ) +
+  theme(
+    panel.grid.major = element_line(color = "gray80", linetype = "dashed"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    plot.caption = element_text(size = 10, color = "grey50")
+  )
+
+```
+
+```{r Network_centralities}
+# Calculate degree centrality for each node
+node_degree <- degree(all_countries, mode = "all")
+
+# Scale degree centrality for node sizes
+node_sizes <- (node_degree - min(node_degree, na.rm = TRUE)) / 
+              (max(node_degree, na.rm = TRUE) - min(node_degree, na.rm = TRUE)) * 20 + 5
+
+# Assign attributes to the graph
+V(all_countries)$size <- node_sizes
+
+clusters <- cluster_louvain(Network_analysis_network)
+
+```
+
+```{r GLM_connection}
+
+connection_model <- glm(
+  network_connection ~ APEC  + InternetUsers_PctOfPopulationUsingInternet + 
+    Urban.Pop..  + Asia+ Europe + South.America + longitude + latitude ,
+  data = World,)
+
+
+Urban_population_con = ggplot(World, aes(x = as.factor(network_connection), y = Urban.Pop.., fill = as.factor(network_connection))) +
+  geom_boxplot() +
+  labs(
+    x = "Network Connection", 
+    y = "Urban population proportion", 
+    fill = "Network Status"  
+  ) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("grey", "forestgreen"), 
+    labels = c("Out of network", "In network")  
+  ) +
+  ggtitle("Role of Urban population in Network Connection")
+
+
+
+APEC_stacked_plot_connect <- ggplot(World, aes(x = as.factor(network_connection), fill = as.factor(network_connection), alpha = as.factor(APEC))) +
+  geom_bar(position = "fill", color = "black") +  # Add borders for clarity
+  labs(
+    x = "Network Connection Status",
+    y = "Proportion",
+    fill = "Network Connection",
+    alpha = "APEC Membership"
+  ) +
+  scale_fill_manual(
+    values = c("0" = "grey80", "1" = "forestgreen"),  # Non-network grey, network green
+    labels = c("Non-network", "Network")
+  ) +
+  scale_alpha_manual(
+    values = c("0" = 0.4, "1" = 1),  # Non-APEC transparent, APEC full opacity
+    labels = c("Non-APEC Member", "APEC Member")
+  ) +
+  theme_minimal() +
+  ggtitle("Proportion of APEC Membership by Network Connection Status")
+
+
+#InternetUsers_PctOfPopulationUsingInternet
+InternetUsers_PctOfPopulationUsingInternet_con = ggplot(World, aes(x = as.factor(network_connection), y = InternetUsers_PctOfPopulationUsingInternet, fill = as.factor(network_connection))) +
+  geom_boxplot() +
+  labs(
+    x = "Network Connection", 
+    y = "InternetUsers_PctOfPopulationUsingInternet", 
+    fill = "Network Status"  
+  ) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("grey", "forestgreen"), 
+    labels = c("Out of network", "In network")  
+  ) +
+  ggtitle("Role of internet population in Network Connection")
+
+
+# S america 
+Samerica_stacked_plot_connect <- ggplot(World, aes(x = as.factor(network_connection), fill = as.factor(network_connection), alpha = as.factor(South.America))) +
+  geom_bar(position = "fill", color = "black") +  # Add borders for clarity
+  labs(
+    x = "Network Connection Status",
+    y = "Proportion",
+    fill = "Network Connection",
+    alpha = "South.America Membership"
+  ) +
+  scale_fill_manual(
+    values = c("0" = "grey80", "1" = "forestgreen"),  # Non-hubs grey, hubs blue
+    labels = c("Non-network", "Network")
+  ) +
+  scale_alpha_manual(
+    values = c("0" = 0.4, "1" = 1),  # Non-South.America transparent, South.America full opacity
+    labels = c("South.America Member", "South.America Member")
+  ) +
+  theme_minimal() +
+  ggtitle("South.America by Network Connection Status")
+
+```
+
+### **The extent to which structural role of countries within the network defined by factors other than geographical position.**
+
+The network status is a grouping of nodes which have similar network characteristics. Hubs have the top 5%-degree centrality and page rank scores, as identifiers of well-connected and important nodes in the network. Intermediaries are within the top 20% of betweeenness scores, they feature in lots of the shortest paths between nodes. Periphery nodes have a degree centrality of one in any network with more than one connection, making an interesting comparison between well connected nodes and less connected ones.  
+
+K means grouping allows for large amounts of data to be reduced to the components which are most influential, by splitting the data into similar groups by features.The number of clusters was selected using the elbow method. The kink in in the plot shows 5 as a suitable number. For this analysis, comparing the GLM results to k means results allows for verification of the findings as it introduces a secondary method for identifying similar features of countries within the network.
+
+```{r Structure_map , warning=FALSE}
+# Merge Countries_basemap with World dataset on the country name
+merged_data <- merge(Countries_basemap, World, by.x = "NAME", by.y = "country", all.x = TRUE)
+
+
+# Update the 'connected' status for missing countries
+Countries_basemap$connected <- ifelse(
+  Countries_basemap$ADMIN %in% missing_countries,
+  "Missing from Analysis",
+  Countries_basemap$connected)
+
+# Ensure the 'role' column is correctly set in merged_data
+# Identify Periphery countries
+periphery_countries <- merged_data %>% filter(role == "Peripheral")
+
+# Calculate centroids of these countries
+periphery_centroids <- st_centroid(periphery_countries)
+
+# Plot the map with countries colored by their role
+Structure_map= ggplot(data = merged_data) +
+  geom_sf(aes(fill = role), color = "black", size = 0.2) +
+  scale_fill_manual(
+    values = c(
+      "Hub" = "dodgerblue4",
+      "Intermediary" = "goldenrod2",
+      "Periphery" = "firebrick3",
+      "Unassigned" = "grey"
+    ),
+    name = "Network Status"
+  ) +
+  # Add circles at the centroids of Periphery countries as they are difficult to see. 
+  geom_sf(data = periphery_centroids, color = "black", size = 2, shape = 21, fill = "firebrick3") +
+  coord_sf(expand = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Network Status of Countries",
+    subtitle = "Classification into Hub, Intermediary, Periphery (in red), and Unassigned"
+  ) +
+  theme(
+    panel.grid.major = element_line(color = "gray80", linetype = "dashed"),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+```
+
+```{r GLM_hub}
+hub_model <- glm(
+  hub ~+EU +InternetUsers_NumberOfInternetUsers+
+  +Migrants..net.+coast_to_area_wri+longitude+latitude+ gdp ,
+  data = World)
+
+
+#  Internet users box plot 
+Hub_internet= ggplot(World, aes(x = as.factor(hub), y = InternetUsers_NumberOfInternetUsers, fill = as.factor(hub))) +
+  geom_boxplot() +
+  labs(
+    x = "Hub Status",
+    y = "Number of Internet users",
+    fill = "Hub Status"  
+  ) +
+  ylim(0, 7.5e+06) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("0" = "grey", "1" = "dodgerblue4"),  
+    labels = c("Not Hub", "Hub")  # Custom labels
+  ) +
+  ggtitle("Role of Internet Users in Hub Status")
+
+
+Hub_mig= ggplot(World, aes(x = as.factor(hub), y = Migrants..net., fill = as.factor(hub))) +
+  geom_boxplot() +
+  labs(
+    x = "Hub Status",
+    y = "Migration by Country",
+    fill = "Hub Status"  # Custom legend title
+  ) +
+  ylim(0,1e+06) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("0" = "grey", "1" = "dodgerblue4"),  
+    labels = c("Not Hub", "Hub")  # Custom labels
+  ) +
+  ggtitle("Role of migration in Hub Status")
+
+
+EU_stacked_plot_hub <- ggplot(World, aes(x = as.factor(hub), fill = as.factor(hub), alpha = as.factor(EU))) +
+  geom_bar(position = "fill", color = "black") +  # add borders 
+  labs(
+    x = "Hub Status",
+    y = "Proportion",
+    fill = "Hub Status",
+    alpha = "EU Membership"
+  ) +
+  scale_fill_manual(
+    values = c("0" = "grey80", "1" = "dodgerblue4"),  # Non-hubs grey, hubs blue
+    labels = c("Non-Hub", "Hub")
+  ) +
+  scale_alpha_manual(
+    values = c("0" = 0.4, "1" = 1),  # EU membership is full opacity, non-EU is transparent
+    labels = c("Not EU Member", "EU Member")
+  ) +
+  theme_minimal() +
+  ggtitle("Proportion of EU Membership by Hub Status")
+
+```
+
+```{r GLM_intermediaries}
+inter_model <- glm(
+  intermediary ~ 
+    APEC  + EU +Population..2020. +gdp 
+ +    coast_to_area_wri + longitude + latitude,
+  data = World)
+
+
+# population box plot 
+inter_pop= ggplot(World, aes(x = as.factor(intermediary), y = Population..2020. , fill = as.factor(intermediary))) +
+  geom_boxplot() +
+  labs(
+    x = "Intermediary Status",
+    y = "2020 population",
+    fill = "Intermediary Status"  
+  ) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("0" = "grey", "1" = "goldenrod2"),  
+    labels = c("Not Intermediary", "Intermediary")  
+  ) +
+  ggtitle("Role of population in Intermediary Status")
+
+# population box plot 
+inter_pop_crop= ggplot(World, aes(x = as.factor(intermediary), y = Population..2020. , fill = as.factor(intermediary))) +
+  geom_boxplot() +
+  labs(
+    x = "Intermediary Status",
+    y = "2020 population",
+    fill = "Intermediary Status"  
+  ) +
+  theme_minimal() +
+  scale_fill_manual(
+    values = c("0" = "grey", "1" = "goldenrod2"),  
+    labels = c("Not Intermediary", "Intermediary")  
+  ) +
+  ylim(0, 2.25e+07)
+  ggtitle("Role of population in Intermediary Status")
+
+
+APEC_stacked_plot <- ggplot(World, aes(x = as.factor(intermediary), fill = as.factor(intermediary), alpha = as.factor(APEC))) +
+  geom_bar(position = "fill", color = "black") +  # add borders 
+  labs(
+    x = "intermediary Status",
+    y = "intermediary",
+    fill = "intermediary Status",
+    alpha = "APEC Membership"
+  ) +
+  scale_fill_manual(
+    values = c("0" = "grey80", "1" = "goldenrod2"),  # Non-hubs grey, hubs blue
+    labels = c("Non-intermediary", "intermediary")
+  ) +
+  scale_alpha_manual(
+    values = c("0" = 0.4, "1" = 1),  # APEC membership is full opacity, non-APEC is transparent
+    labels = c("Not APEC Member", "APEC Member")
+  ) +
+  theme_minimal() +
+  ggtitle("Proportion of APEC Membership by intermediary Status")
+
+
+```
+
+```{r K_means}
+# need to make the data numeric 
+numeric_cols <- sapply(World, is.numeric)
+World_numeric <- World[, numeric_cols]  
+
+World_scaled <- scale(World_numeric)
+World_scaled[is.na(World_scaled)] <- 0
+
+
+
+wss <- sapply(1:10, function(k) {
+  kmeans(World_scaled, centers = k, nstart = 25)$tot.withinss
+})
+
+# plot for elbow method 
+plot(1:10, wss, type = "b", pch = 19, frame = FALSE,
+     xlab = "Number of Clusters (k)",
+     ylab = "Total Within-Cluster Sum of Squares",
+     main = "Elbow Method for Optimal k")
+
+# finding clusters 
+k <- 5  # chosen with elbow method 
+kmeans_result <- kmeans(World_scaled, centers = k, nstart = 25)
+
+# include cluster in data set
+World$Cluster <- kmeans_result$cluster
+
+
+pca_result <- prcomp(World_scaled)
+pca_data <- data.frame(pca_result$x[, 1:2], Cluster = as.factor(World$Cluster), Country = World$country)
+
+kmeans_result= ggplot(pca_data, aes(x = PC1, y = PC2, color = Cluster, label = Country)) +
+  geom_point(size = 2) +
+  geom_text(vjust = 1.5, size = 2.5) +
+  labs(title = "k-Means Clustering Visualization (PCA)", x = "Principal Component 1", y = "Principal Component 2") +
+  theme_minimal()
+```
+
+### **Identify the largest potential for connections between countries based on their demographic and geographic characteristics.** 
+
+Using a combination of a gravity model and the parameters from the world data-set the Random forest is used to predict the most important features for large data transfer. This was made without the actual connections due to issues with the igraph object. The random forest model is a machine learning method which does not require normally distributed data to predict the potential importance of a feature.
+
+```{r Random forest}
+
+# Make the pairs 
+country_pairs <- expand.grid(country_i = World$country, country_j = World$country) %>%
+  filter(country_i != country_j)  # only include differnet countries 
+
+# join the features 
+pairs_data <- country_pairs %>%
+  left_join(World, by = c("country_i" = "country")) %>%
+  rename(
+    gdp_i = gdp,
+    internet_users_i = InternetUsers_NumberOfInternetUsers,
+    urban_population_i = Urban.Pop..,
+    latitude_i = latitude,
+    longitude_i = longitude,
+    role_i = role)
+
+# Join features for 'country_j'
+pairs_data <- pairs_data %>%
+  left_join(World, by = c("country_j" = "country")) %>%
+  rename(
+    gdp_j = gdp,
+    internet_users_j = InternetUsers_NumberOfInternetUsers,
+    urban_population_j = Urban.Pop..,
+    latitude_j = latitude,
+    longitude_j = longitude,
+    role_j = role
+  )
+
+# potential connections importance based on reverse gravity model 
+pairs_data <- pairs_data %>%
+  mutate(
+    distance = sqrt((latitude_i - latitude_j)^2 + (longitude_i - longitude_j)^2),  # rough distance 
+    potential_importance = (internet_users_i * internet_users_j) / (distance + 1)  # Prevent division by zero
+  )
+
+# Prep for rf 
+predictors <- pairs_data %>%
+  select(gdp_i, internet_users_i, urban_population_i, latitude_i, longitude_i,
+         gdp_j, internet_users_j, urban_population_j, latitude_j, longitude_j)
+# cant process NA values
+predictors[is.na(predictors)] <- 0
+# Define the response variable: potential importance of a connection
+response <- pairs_data$potential_importance
+
+# Fit the Random Forest Model
+rf_model <- randomForest(x = predictors, y = response, ntree = 500, importance = TRUE)
+
+
+Feature_importance= varImpPlot(rf_model, main = "Feature Importance of Potential Connection")
+
+
+
+# use the rf to predict importance by pair 
+pairs_data$predicted_importance <- predict(rf_model, newdata = predictors)
+
+# select the top importance 
+top_connections <- pairs_data %>%
+  arrange(desc(predicted_importance)) %>%
+  slice(1:10)
+```
+
+# [Results]{.underline}
+
+### **H1**
+
+#### Network map
+
+```{r Network_map}
+Network_map
+```
+
+This map shows the routes of all undersea internet cables and highlights the association of countries to the network. The 141 Countries highlighted in green are connected to at least one other country by undersea internet cables. The 72 grey countries are those with no connection to the network. There were 18 countries which have visible connections but have not been included in the analysis, these are highlighted in red. These include Brazil, Bangladesh, Vietnam, Congo and South Korea as well as others.
+
+#### Connected Network
+
+```{r Connected_network,  fig.width=20, fig.height=15, warning=FALSE}
+
+plot(
+  Network_analysis_network,
+  layout = layout_with_fr(Network_analysis_network),  
+  vertex.size = V(all_countries)$size,
+  vertex.color = as.factor(membership(clusters)),  
+  vertex.label.cex = 1,
+  vertex.label.color = "black",
+  edge.color = "blue",
+  main = "Clustered network plot")
+
+```
+
+This network plot shows how countries are connected within the network of undersea internet cables. The blue edges between countries represent a connection of at least one undersea internet cable. The node colours are representative of the cluster it belongs to, some sub-networks are large enough to include multiple clusters within them. The three large sub-networks account for the majority of countries within the undersea internet cable network. There are smaller sub-networks which include less countries as well as some dyad and tryad sub-networks. The size of nodes in this plot is defined by the degree centrality of each country, showing the number of countries connected to a given country by undersea internet cables. The United States has the largest degree centrality, followed by the United Kingdom.
+
+#### GLM connection
+
+```{r GLM_connection_1}
+summary(connection_model)
+```
+
+#### 
+
+The results from this GLM show the features which are important in connection to the network. This GLM uses the dependent variable of country inclusion in the network, and compares it to selected independent variables. The features which are statistically significant at a 95% confidence interval include membership to APEC, Urban population, proportion of population using the internet and not being in Asia, South America or Europe. At a lower confidence interval (90%), lower latitude countries are less likely to be in the network.
+
+#### Urban population
+
+```{r Urban population in and out of network, warning=FALSE}
+Urban_population_con
+```
+
+This plot shows the proportion of countries populations which live in urban areas compared between those within the network and outside of it. The mean ratio of urban population within the undersea cable network is 0.62, whereas outside of the network it is 0.4. Additionally, the IQR is higher for the within network countries. Countries within the network have higher proportions of their populations living in urban areas than those not in the network.
+
+#### APEC network connection
+
+```{r APEC in and out of Network}
+APEC_stacked_plot_connect
+```
+
+The proportion of countries in APEC between in and out of the network groups are compared in this plot. For countries within the network there are a higher proportion of APEC members, with values around 0.12. This value is lower, at 0.01 for countries outside of the network. While the proportion of APEC members is low for the entire group of countries in the network, it is higher than the number of members outside of the network.
+
+**Role of Internet in network connection**
+
+```{r}
+InternetUsers_PctOfPopulationUsingInternet_con
+```
+
+This box plot shows that the percentage of internet users in the countries included in the network are higher than those not in the network. The mean percentage of the population with internet access in the network is 65% whereas outside of the network its 35%.
+
+**Role of South America in network connection**
+
+```{r}
+Samerica_stacked_plot_connect
+```
+
+The bar plot shows that there is slightly fewer South American countries in the network than when compared with the proportion outside of the network.
+
+### **H2**
+
+#### Network status map
+
+```{r Network_roles_map}
+Structure_map
+```
+
+This map highlights the structural position of countries within the Undersea internet cable network. Hub nations are identified in green. These include the USA, UK, Indonesia, Sweden and Italy. The majority of categorised countries fall under the intermediary status in yellow, some of these include Canada, France, India, China and Australia. Periphery nations are small so require points to identify them in red. These include New-Zealand, Iceland and Japan. Some countries didn't fall under any category and are unassigned in grey, others in black are NA and don't have any connections to the network.
+
+#### Hubs
+
+```{r Hub}
+summary(hub_model)
+```
+
+The GLM model summary shows where there are statistically significant differences between the features of countries identified as hubs and the countries which weren't. There are two statistically significant results to a 95% confidence interval, the number of migrants hub nations take in are higher and the number of internet users are higher. EU membership is significant at a lower 90% confidence interval.
+
+```{r}
+Hub_internet
+Hub_mig
+EU_stacked_plot_hub 
+```
+
+The plots comparing the values of statistically significant features between hub and non hub nations are shown. For Internet users and population plots, outliers have been cropped to focus on the IQR. For Hub nations, the number of people online is higher than for non-hub nations. Half of hub nations are in the EU. When compared to the proportion of non-hub nations in the EU at around 10% it can be seen hub nations are more European. Additionally, hub nations have a higher net migration value.
+
+#### Intermediaries
+
+```{r Intermediary}
+summary(inter_model)
+```
+
+For intermediary countries the GLM output shows that there is a statistically significant difference between the intermediary and non-intermediary groups in term of APEC membership and Population to a 95% confidence interval. APEC membership is higher in the Intermediary nations at a 90% confidence interval.
+
+**Intermediary population**
+
+```{r}
+inter_pop
+inter_pop_crop
+```
+
+The box plot comparing Populations between intermediary and non-intermediary show that while there is a higher mean population across the intermediary countries, the upper quartile of the non-intermediary is higher. This is potentially influenced by India and China who can be seen with higher population values in the non-cropped box plot. APEC membership is higher in the Intermediary group than it is outside of it.
+
+**Intermediary APEC**
+
+```{r}
+APEC_stacked_plot
+```
+
+The proportion of countries as members of APEC is higher for intermediaries than other countries. Within the intermediaries its around 0.15 and outside it is around 0.04.
+
+#### K means
+
+```{r K_means_result}
+kmeans_result
+print(pca_result$rotation[, 1:2])
+```
+
+From the PCA1 output, as PCA1 increases network connectivity decreases. As this PCA increases there is less network centrality, degree centrality, sub network distance and betweenness centrality. For PCA2 population factors are more influential, with an increase in PCA2 being associated with higher populations, higher internet populations,more migration in and higher membership to BRIC, EU nations.
+
+When plotted, this shows that cluster four has high network connectivity, and relatively low population. Cluster five has both low connectivity and low population. Cluster two and three have better connectivity but a larger population for group two. Then cluster one appears to be a high population, high connectivity outlier.
+
+### **H3**
+
+**Random forest**
+
+```{r}
+print(rf_model)
+Feature_importance
+print(top_connections %>% select(country_i, country_j, predicted_importance))
+```
+
+The output of the random forest model shows 57% of the predicted variation in data flow (between countries) can be explained by the variables given to the model. The most important features identified by the rf model are the number of internet users in each country which combined account for around 40% of variation. The geographical position accounts for around 30% of variation. GDP and urban populations acount for small amounts of the variation. These results predict the highest flows between China- India India-Bangladesh and Pakistan-India.
+
+# [Discussion]{.underline}
+
+### **H1**
+
+The results show that relative to unconnected countries, the countries in the network have a higher proportion of APEC members, a higher urban population and a higher Internet population. Additionally countries from the continents of Europe, Asia and South America are less likely to be connected to the network. The APEC trade agreement was established to allow free trade around the Pacific Ocean and includes China, Russia, the USA, Australia and others. The link between free trade and the installation of internet cables indicates that the connections go beyond trade. Countries with trading links are more closely intertwined and require direct internet connections. Higher urban populations show that countries with more cities and towns are more connected internationally by the internet cable network than countries which aren't. This suggests countries with larger cities (relative the rest of their population) are more connected internationally. Geographically the coastal ratio and locations of centroids are not statistically significant at a 95% confidence interval.  This suggests that for connection to the undersea internet cable network is not defined by coastal shape but rather urban population and membership to trade agreements. The continent a country is in plays some role in the connection to the network. Europe, Asia and South america have some land locked countries which would be impossible to install subsea internet cables to which may explain the lower number of connections. This shows that the extent to which geographical location of a country is important, but that other demographic factors are also important.
+
+### **H2**
+
+Understanding the roles countries play within thier sub-network allows for further development of the network to be efficient and resilient. Hub nodes are at highest risk to targeted attack, if they are removed from the network, many countries will feel the impact. Additionally, the tapping of information through these hub nations will pose the largest risk to privacy. Intermediary nodes make up the largest proportion of assigned nodes, these are identified as being important in the network as a large amount of shortest paths travel through them. This makes them vulnerable to random attacks, through natural disaster such as landslides, earthquakes, animal or accidental human induced damage. There are a large number of these connections and if they break the network must be quickly repaired.
+
+The GLM model shows that hub nations have higher EU membership, higher migration in and higher populations of internet users. EU countries may be more open to connections as they are already in a trading group. The higher rate of internet users in the hub countries may be a result of the connection to the network rather than a causal effect the other way round. Intermediary nations have higher populations and rates of APEC membership than non-intermediary ones. This suggests that again links are required in the network between countries of high populations. Additionally, APEC membership may represent a higher rate of connection to other countries. India and China appear to be driving this relationship as their populations are much higher than any other nations.
+
+The k means clustering suggests that the most important factors in defining the connections within the network are population based rather than geographical. It also highlights the importance of network connectivity measures in grouping countries, which strengthens the classifications of the structural position in the network. An example of this can be seen with cluster four matching very closely to the hubs identified by network measures as well as India and China being identified as outliers. The PCA analysis found population, number of internet users, and trade groups as useful groupings for countries. The k means clustering reinforces the findings of the GLM models and helps answer the hypothesis suggesting that population and trading groups are the most important factors in the structure of the undersea cable network.
+
+Overall the work suggests that European, Asian and South american regions are underrepresented in the network, and that some expansion is required for these areas to meet international connectivity rates. The results also demonstrate that highly connected nations are more welcoming of trade and migration. Which may be an indicator of globalization playing an important role in the network. These highly connected countries will be at the highest risk from targeted attack as the large amounts of data will be the most exposed at these connections. Connections from hub and intermediary nations such as the USA, UK, China and India need the highest level of protection through increasing the number of connections from these nations for network resilience against cable breakage.
+
+### **H3** 
+
+The random forest predicts high value connections based on demographic and geographic factors. Which is useful for both maintaining current connections and direct where new connections would be most effective. The large population of internet users combined with relatively close proximity is increasing the value of connections within Asia. This can be used to highlight the importance of all the connections within the Asian region connecting these nations as the rf estimates they have the most important data flows.
+
+### **Strengths of analysis**
+
+The analysis has strength in finding statistically significant results. Membership to the undersea internet cable network is influenced by trade agreements and urban populations. Highly connected and important nodes in the network have higher populations and higher internet populations. Less connected nodes are more defined by geography, with islands being more likely to be in the periphery group than any other. GLM modelling allows for the grouping of non-normal and non linear connections to model a diverse range of variables to a given dependant variable. These results are strengthened by the k means and random forest grouping which also identifies population as an effective method of assessing the geography of the undersea internet cable network.
+
+### **Limitations of analysis**
+
+The main limitation of this analysis is the removal of the 18 nations when the network for analysis was created. This means the influence of them can't be included in the GLM or K means, reducing the accuracy of the results.
+
+There may be some bias in the data where periphery nations are more likely to be in the North American continent. Where the name of small islands owned/ governed by the US were not recognised in the data-set of country information it was changed to being the USA. This will increase the number of small islands recognised as being in the Northern American continent and increase the population figures as the US is much larger than small islands.
+
+The random forest model lacks connection to the grid, this means its results are somewhat theoretical. The cost and logistics of installing cables is not included and the distance projections have a bias towards nations close in terms of latitude and longitude, but across the pacific ocean values of longitude will jump from -180 to 180 and be close in reality.
+
+Further study could focus on the characteristics driving connections through gravity modelling. A basic gravity model based on the internet traffic of each country could be used to identify where there are close countries with high internet use which could benefit from a new undersea internet cable connection. The gravity equation would need to be adjusted so flow is highest between high and high nations rather than high and low ones. It would also be useful in identifying the connections with the highest flow and therefore most risk to being deliberately tapped or broken.
+
+# [Conclusion]{.underline}
+
+This work demonstrates how the undersea internet cable network is driven by factors more diverse than geographical location alone. Demographics play a more important role in the importance of connections than geography.
+
+Analysis of countries connected to the network show that nations outside of APEC, Europe, Asia and S. America and those with lower urban populations are underrepresented in the undersea internet cable network.
+
+Additionally, island nations outside of the EU are likely to play less important roles in the network. The most important countries in the network have larger populations, more inward migration and are more likely to be in the EU. These nations face the greatest risk of targeted attack on the network.
+
+These results highlight the importance of increasing the network connectivity especially for countries with lower urban populations. It also shows the role countries with large populations play within the undersea cable network. This can be used to guide the implementation of new network connections based on population and trade links, results reinforced by the k means clustering analysis.
+
+# 
+
+# **Bibliography** 
+
+\'European Union\' (2024) *Wikipedia*. Available at: <https://en.wikipedia.org/w/index.php?title=European_Union&oldid=1260536099> (Accessed: 3 December 2024).
+
+Ross, M. (2014) \'Understanding Interconnectivity of the Global Undersea Cable Communications Infrastructure and its Implications for International Cyber Security\', *SAIS Review of International Affairs*, 34(1), pp. 141--155.
+
+Sugadev, A. (2016) \'India\'s critical position in the global submarine cable network: an analysis of Indian law and practice on cable repairs\', *Indian Journal of International Law*, 56(2), pp. 173--200. Available at: <https://doi.org/10.1007/s40901-017-0050-y.>
